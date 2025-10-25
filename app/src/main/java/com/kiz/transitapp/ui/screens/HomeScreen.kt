@@ -6,12 +6,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.Thunderstorm
+import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.Grain
+import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.WbTwilight
+import androidx.compose.material.icons.filled.Nightlight
+import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -19,6 +30,7 @@ import androidx.navigation.NavController
 import com.kiz.transitapp.ui.navigation.Screen
 import com.kiz.transitapp.ui.viewmodel.TransitViewModel
 import com.kiz.transitapp.ui.viewmodel.BusStop
+import com.kiz.transitapp.ui.components.RoastManager
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -31,6 +43,62 @@ private fun getCurrentTime(): String {
 private fun getCurrentDate(): String {
     val dateFormat = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
     return dateFormat.format(Date())
+}
+
+// Get appropriate weather icon based on OpenWeatherMap icon code
+private fun getWeatherIcon(iconCode: String): ImageVector {
+    return when {
+        iconCode.startsWith("01") -> Icons.Filled.WbSunny // Clear sky
+        iconCode.startsWith("02") -> Icons.Filled.CloudQueue // Few clouds
+        iconCode.startsWith("03") || iconCode.startsWith("04") -> Icons.Filled.Cloud // Clouds
+        iconCode.startsWith("09") || iconCode.startsWith("10") -> Icons.Filled.Grain // Rain
+        iconCode.startsWith("11") -> Icons.Filled.Thunderstorm // Thunderstorm
+        iconCode.startsWith("13") -> Icons.Filled.AcUnit // Snow
+        iconCode.startsWith("50") -> Icons.Filled.Cloud // Mist/fog
+        else -> Icons.Filled.Cloud // Default
+    }
+}
+
+// Get appropriate time icon based on current hour
+private fun getTimeIcon(): ImageVector {
+    val calendar = Calendar.getInstance()
+    val hour = calendar.get(Calendar.HOUR_OF_DAY)
+
+    return when (hour) {
+        in 6..11 -> Icons.Filled.WbTwilight // Morning (sunrise)
+        in 12..17 -> Icons.Filled.WbSunny // Afternoon (sun)
+        in 18..20 -> Icons.Filled.WbTwilight // Evening (sunset)
+        else -> Icons.Filled.Nightlight // Night (moon)
+    }
+}
+
+// Get contextual color for time icon
+@Composable
+private fun getTimeIconColor(): Color {
+    val calendar = Calendar.getInstance()
+    val hour = calendar.get(Calendar.HOUR_OF_DAY)
+
+    return when (hour) {
+        in 6..11 -> Color(0xFFFFA726) // Morning orange
+        in 12..17 -> Color(0xFFFFD54F) // Afternoon yellow
+        in 18..20 -> Color(0xFFFF7043) // Evening orange-red
+        else -> Color(0xFF9FA8DA) // Night purple-blue
+    }
+}
+
+// Get contextual color for weather icon
+@Composable
+private fun getWeatherIconColor(iconCode: String): Color {
+    return when {
+        iconCode.startsWith("01") -> Color(0xFFFFD54F) // Clear sky - yellow
+        iconCode.startsWith("02") -> Color(0xFFB0BEC5) // Few clouds - light gray
+        iconCode.startsWith("03") || iconCode.startsWith("04") -> Color(0xFF90A4AE) // Clouds - gray
+        iconCode.startsWith("09") || iconCode.startsWith("10") -> Color(0xFF64B5F6) // Rain - blue
+        iconCode.startsWith("11") -> Color(0xFF9575CD) // Thunderstorm - purple
+        iconCode.startsWith("13") -> Color(0xFFE1F5FE) // Snow - light blue/white
+        iconCode.startsWith("50") -> Color(0xFFCFD8DC) // Mist - light gray
+        else -> Color(0xFF90A4AE) // Default - gray
+    }
 }
 
 @Composable
@@ -92,6 +160,11 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Roast card
+            item {
+                RoastCard()
+            }
+
             item {
                 Text(
                     text = "Favourite Stops",
@@ -210,28 +283,55 @@ fun WeatherCard(viewModel: TransitViewModel, modifier: Modifier = Modifier) {
                         verticalAlignment = Alignment.Top
                     ) {
                         Column {
-                            Text(
-                                text = getCurrentTime(),
-                                fontSize = 24.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = getCurrentDate(),
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = getTimeIcon(),
+                                    contentDescription = "Time",
+                                    tint = getTimeIconColor(),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = getCurrentTime(),
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.Event,
+                                    contentDescription = "Date",
+                                    tint = Color(0xFF81C784),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = getCurrentDate(),
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                )
+                            }
                         }
 
                         Column(
                             horizontalAlignment = Alignment.End
                         ) {
-                            Text(
-                                text = "${weatherData!!.temperature}°C",
-                                fontSize = 28.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = getWeatherIcon(weatherData!!.icon),
+                                    contentDescription = "Weather",
+                                    tint = getWeatherIconColor(weatherData!!.icon),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "${weatherData!!.temperature}°C",
+                                    fontSize = 28.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                             Text(
                                 text = "Feels ${weatherData!!.feelsLike}°C",
                                 fontSize = 12.sp,
@@ -269,28 +369,55 @@ fun WeatherCard(viewModel: TransitViewModel, modifier: Modifier = Modifier) {
                         verticalAlignment = Alignment.Top
                     ) {
                         Column {
-                            Text(
-                                text = getCurrentTime(),
-                                fontSize = 32.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = getCurrentDate(),
-                                fontSize = 16.sp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = getTimeIcon(),
+                                    contentDescription = "Time",
+                                    tint = getTimeIconColor(),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = getCurrentTime(),
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.Event,
+                                    contentDescription = "Date",
+                                    tint = Color(0xFF81C784),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = getCurrentDate(),
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                )
+                            }
                         }
 
                         Column(
                             horizontalAlignment = Alignment.End
                         ) {
-                            Text(
-                                text = "Windsor",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.LocationOn,
+                                    contentDescription = "Location",
+                                    tint = Color(0xFFEF5350),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Windsor",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                             Text(
                                 text = "Ontario",
                                 fontSize = 14.sp,
@@ -457,3 +584,55 @@ fun FavoriteStopCard(
         }
     }
 }
+
+@Composable
+fun RoastCard() {
+    // Generate a seed based on current timestamp to get a different roast each app open
+    // Using System.currentTimeMillis() ensures it changes every time the app is opened
+    val roastSeed = remember { System.currentTimeMillis() }
+    val roast = remember(roastSeed) {
+        RoastManager.randomRoast(seed = roastSeed)
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = when (roast.category) {
+                    RoastManager.Category.TRANSIT -> "🚌 Transit Wisdom"
+                    RoastManager.Category.WEATHER -> "🌦️ Weather Check"
+                    RoastManager.Category.TIME_OF_DAY -> "⏰ Time Check"
+                    RoastManager.Category.DEVICE -> "📱 Device Status"
+                    RoastManager.Category.PERSONAL -> "💭 Personal Update"
+                    RoastManager.Category.PHILOSOPHY -> "🤔 Deep Thoughts"
+                    RoastManager.Category.VET_TECH -> "🐾 Vet Tech Life"
+                },
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Text(
+                text = roast.text,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Normal,
+                color = MaterialTheme.colorScheme.onSurface,
+                lineHeight = 20.sp
+            )
+        }
+    }
+}
+
+

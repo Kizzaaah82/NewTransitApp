@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
 
 // Define Material 3 color schemes using your color palette
 private val LightColorScheme = lightColorScheme(
-    primary = CyanAccent,
+    primary = PastelBlue,
     onPrimary = DarkOnPrimary,
     primaryContainer = PastelBlue,
     onPrimaryContainer = DarkCharcoal,
@@ -28,7 +28,7 @@ private val LightColorScheme = lightColorScheme(
 )
 
 private val DarkColorScheme = darkColorScheme(
-    primary = CyanAccent,
+    primary = PastelBlue,
     onPrimary = DarkOnPrimary,
     primaryContainer = DeepBlue,
     onPrimaryContainer = PastelBlue,

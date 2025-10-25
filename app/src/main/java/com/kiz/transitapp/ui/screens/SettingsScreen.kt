@@ -109,7 +109,10 @@ fun SettingsScreen(
                     } else {
                         Button(
                             onClick = { viewModel.triggerManualUpdate() },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         ) {
                             Icon(
                                 imageVector = Icons.Default.FileDownload,
@@ -127,7 +130,7 @@ fun SettingsScreen(
                             text = updateState.status,
                             style = MaterialTheme.typography.bodySmall,
                             color = if (updateState.status.contains("success", ignoreCase = true))
-                                MaterialTheme.colorScheme.primary
+                                MaterialTheme.colorScheme.onPrimaryContainer
                             else
                                 MaterialTheme.colorScheme.error
                         )
@@ -261,7 +264,7 @@ fun SettingsItem(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(24.dp)
             )
 
@@ -288,7 +291,7 @@ fun SettingsItem(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
         }

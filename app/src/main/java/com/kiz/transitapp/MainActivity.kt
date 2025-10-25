@@ -90,14 +90,22 @@ fun NextStopApp() {
             // This prevents it from appearing on the TimetableScreen.
             if (currentDestination?.route in topLevelScreenRoutes) {
                 TopAppBar(
-                    title = { Text("Next stop: WHO KNOWS!") }
+                    title = {
+                        Text(
+                            "Next stop: WHO KNOWS?!?!",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 )
             }
         },
         bottomBar = {
             // Conditionally show the bottom bar as well, if desired
             if (currentDestination?.route in topLevelScreenRoutes) {
-                NavigationBar {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                ) {
                     bottomNavItems.forEach { screen ->
                         NavigationBarItem(
                             icon = { Icon(screen.icon, contentDescription = screen.title) },
@@ -111,7 +119,14 @@ fun NextStopApp() {
                                     launchSingleTop = true
                                     restoreState = true
                                 }
-                            }
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         )
                     }
                 }
