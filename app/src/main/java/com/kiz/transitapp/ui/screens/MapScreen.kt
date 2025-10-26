@@ -625,6 +625,7 @@ fun MapScreen(
                                                     fontWeight = FontWeight.Medium,
                                                     modifier = Modifier.weight(1f, fill = false)
                                                 )
+
                                                 // Show warning icon if this route has active alerts
                                                 if (viewModel.hasActiveAlerts(route.shortName)) {
                                                     Spacer(modifier = Modifier.width(8.dp))
@@ -635,22 +636,54 @@ fun MapScreen(
                                                         modifier = Modifier.size(20.dp)
                                                     )
                                                 }
+
+                                                // Show operational warning icon (delays/cancellations)
+                                                if (viewModel.hasOperationalWarnings(route.shortName)) {
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Icon(
+                                                        imageVector = Icons.Default.Schedule,
+                                                        contentDescription = "Operational delays",
+                                                        tint = Color(0xFFFF9800), // Orange color for warnings
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
 
                                             // Show alert text if there are active alerts
                                             val routeAlerts = viewModel.getAlertsForRoute(route.shortName)
-                                            if (routeAlerts.isNotEmpty()) {
-                                                Text(
-                                                    text = "Route ${route.shortName} • ${routeAlerts.first().headerText}",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.error
-                                                )
-                                            } else {
-                                                Text(
-                                                    text = "Route ${route.shortName}",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
+                                            val operationalWarnings = viewModel.getOperationalWarningsForRoute(route.shortName)
+
+                                            when {
+                                                routeAlerts.isNotEmpty() -> {
+                                                    Text(
+                                                        text = "Route ${route.shortName} • ${routeAlerts.first().headerText}",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+                                                operationalWarnings.isNotEmpty() -> {
+                                                    val warning = operationalWarnings.first()
+                                                    val warningText = when (warning.warningType) {
+                                                        com.kiz.transitapp.ui.viewmodel.OperationalWarningType.SIGNIFICANT_DELAYS ->
+                                                            "${warning.delayMinutes} min delays"
+                                                        com.kiz.transitapp.ui.viewmodel.OperationalWarningType.MODERATE_DELAYS ->
+                                                            "Minor delays"
+                                                        com.kiz.transitapp.ui.viewmodel.OperationalWarningType.TRIP_CANCELLATION ->
+                                                            "${warning.affectedTrips} trip(s) cancelled"
+                                                    }
+                                                    Text(
+                                                        text = "Route ${route.shortName} • $warningText",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = Color(0xFFFF9800) // Orange
+                                                    )
+                                                }
+                                                else -> {
+                                                    Text(
+                                                        text = "Route ${route.shortName}",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -985,31 +1018,25 @@ fun StopInfoCard(
 @Composable
 fun ArrivalTimeItem(arrival: com.kiz.transitapp.ui.viewmodel.StopArrivalTime, viewModel: TransitViewModel) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Route ${arrival.routeId}",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
-            )
-            if (arrival.isRealTime) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "LIVE",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
+        // Route label
+        Text(
+            text = "Route ${arrival.routeId}",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(end = 12.dp)
+        )
 
-        // Use the standardized component instead of manual calculations
+        // Enhanced arrival time display with delay badge
         com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
             arrival = arrival,
-            viewModel = viewModel
+            viewModel = viewModel,
+            modifier = Modifier.weight(1f)
         )
     }
 }

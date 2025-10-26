@@ -1,0 +1,395 @@
+Kieran, this is shaping up nicely. You’ve got a clean Compose UI, sensible VM boundaries, and you’re already surfacing both **formal alerts** and **operational issues**. Here’s a straight-shooting review with precise fixes.
+
+# What’s solid
+
+* You’re unifying “any issues” off both formal **Service Alerts** and **TripUpdates**. That’s the right mental model.
+* Alert activity checks correctly handle **multiple active periods** and “no time restriction”. You’re using an **OR** over periods, which is correct.
+* The **ArrivalTimeDisplay** component is clean, reusable, and gives you a single source of truth for ETA text + badges. The “LIVE” treatment and compact mode are tidy.
+
+# Issues & surgical fixes
+
+## 1) “LIVE” badge should respect feed freshness
+
+Right now, the **LIVE** badge shows whenever `isRealTime` is true, even if the GTFS-RT feed is stale. You’re not piping freshness into the UI, so users can be misled.
+
+**What to change**
+
+* Add a `isFeedFresh: Boolean` to your arrival VM model (where you map repository merged arrivals). You already compute countdowns centrally; do the same for freshness.
+* Only render `LIVE` and any delay badge when `isRealTime && isFeedFresh`.
+
+Where to inject: when you map `MergedArrivalTime → StopArrivalTime`. (You already do this mapping in two places.)
+
+## 2) Delay grammar & thresholds (tiny UX papercuts)
+
+Your badge logic is solid but a bit jumpy around 30–60s and pluralization.
+
+* “mins” vs “min”: you’ve got “1 min” correct in the **main ETA**, but the **badge** always uses plural (“${delayMinutes} min late”) for any value >1; good, but handle **exactly 0** by showing **On time** (you already do), and avoid showing “Delayed” when `delaySeconds` is 31s but main ETA reads an even minute. Consider rounding delay to **nearest minute** for the badge to avoid weird 1m/“Delayed” flicker at 60s.
+* Also, your “On time” badge uses `onPrimary` text on a **semi-transparent** primary background. That can wreck contrast in dark themes.
+
+**What to change (ArrivalTimeDisplay.kt)**
+
+* Round `delayMinutes` from `kotlin.math.roundToInt()` on `delaySeconds/60.0`.
+* For “On time”, use a neutral surface/outline style instead of semi-transparent primary to keep contrast consistent.
+
+Ref: delay badge block.
+
+## 3) Scheduled baseline math can go negative
+
+`scheduledCountdown = countdown - (delaySeconds / 60)` truncates toward zero. With negative delays (early), this can bump scheduled into the future incorrectly, and with small delays it can off-by-one.
+
+**What to change**
+
+* Compute:
+  `val scheduledCountdown = (countdown - (delaySeconds / 60.0)).roundToInt().coerceAtLeast(0)`
+* Same place you build “Scheduled: …” microcopy.
+
+## 4) Route ID vs shortName confusion in alert queries
+
+You call `hasActiveAlerts(route.shortName)` and `getAlertsForRoute(route.shortName)`. That implies your `ServiceAlert.affectedRoutes` are **short names**, not GTFS `route_id`s. Be consistent across the app or you’ll silently drop alerts on systems where shortName ≠ route_id.
+
+* Your `getAlertsForRoute(routeId: String)` checks membership against `alert.affectedRoutes.contains(routeId)`. If those lists aren’t normalized to **short names**, you’ll miss alerts.
+* In the drawer you pass shortName into those calls.
+
+**What to change**
+
+* Pick one canonical key (I recommend **route shortName** for UI, **route_id** for data).
+* If you stick with shortName, ensure your alert parsing always maps `informed_entity.route_id → shortName` before storing. If you stick with route_id, translate the UI calls to route_id at call sites.
+
+## 5) Polling duplication and battery life
+
+You’re polling trip updates in **NearbyStops** every 30s via a `while(true)` loop, and in **Home** every 15s—with separate loops. That’s double work and can hammer the feed.
+
+* NearbyStops polling:
+* HomeScreen polling:
+
+**What to change**
+
+* Centralize polling in the ViewModel: one job that updates a StateFlow, and screens just **collect**. You already have `setAutoRefresh(enabled: Boolean)` and helpers; use them.
+* Consider exponential backoff (you already track `failureCount` on Home, but it doesn’t change cadence).
+
+## 6) Build-time hotspots in NearbyStops
+
+Per-stop route lookup scans `stopsForRoute.entries` and `.any { it.id == stop.id }` for every stop—quadratic on big data.
+
+* Location:
+
+**What to change**
+
+* Precompute a `stopId → List<RouteInfo>` map in your **OptimizedTransitData** once and read it here. You already maintain several precomputed maps; this belongs with them.
+
+## 7) Favorites: implicit shortName matching
+
+In favorites → arrivals mapping you convert `routeId` to **shortName** for UI (good), but then later elsewhere you also use “routeId” to mean shortName. Keep the naming honest to future you.
+
+* Mapping site: `StopArrivalTime(routeId = shortName, …)` (i.e., that field is a short name).
+  Do the same consistently in `FavoriteStopWithArrivals` rendering.
+
+## 8) Drawer alerts: priority & duplication
+
+You show the **first** alert’s header only. If multiple are active (detour + delays), riders miss critical info; also duplicate/near-duplicate alerts can appear.
+
+* Current treatment: first header only.
+
+**What to change**
+
+* Sort alerts by priority (DETOUR/NO_SERVICE > SIGNIFICANT_DELAYS > STOP_MOVED > other) and dedupe by `(effect, headerText)`. Show the **highest priority** one, plus a “+N more” link/line.
+
+# Minor wins (quick)
+
+* **Vehicle markers**: you already remember by `(vehicleId, lat, lon)` to force position updates—good. Keep an eye on icon caching exceptions (you log and continue; that’s fine).
+* **Favorite toggle** on the stop card smartly falls back if no route is selected—good edge-case coverage.
+
+# TL;DR patch list
+
+* Add `isFeedFresh` to arrivals, gate **LIVE** + delay badges on it.
+* Round delay minutes and fix contrast on “On time” badge.
+* Fix scheduled baseline calc (`roundToInt`, `coerceAtLeast(0)`).
+* Normalize **route key** for alerts (shortName vs route_id) and stick to it everywhere.
+* Centralize polling in VM; screens collect.
+* Precompute `stopId→routes` in optimized data to speed NearbyStops.
+* Prioritize/dedupe multiple alerts in the drawer.
+
+You’ve got the bones of a proper transit app here. Patch the freshness gate and the route-ID consistency first; those two will kill the most confusion for riders. Then do the battery-friendly polling refactor and the tiny UI math tweaks. After that, it’s just polish and screenshots.
+
+
+Ignore everything below this line.
+
+
+Yup—that’s exactly the right UX: show **one real-time ETA** as the headline, and keep **two scheduled times** underneath as “baseline expectations.” When a bus is late, make the delay *explicit* right next to the real-time ETA. People don’t want vibes; they want numbers.
+
+Here’s the no-nonsense logic I’d use, plus drop-in Kotlin you can paste later.
+
+---
+
+## How to compute & display it
+
+**Inputs per arrival candidate (for this stop/route):**
+
+* `scheduledEpoch`: from GTFS (stop_times.txt)
+* `predictedEpoch`: from TripUpdates (if present: arrival.time or fallback to departure.time)
+* `delaySec`: from TripUpdates (if present, max of arrival/departure delay; else `predictedEpoch - scheduledEpoch`)
+* `statusFlags`: `CANCELED`, `SKIPPED`, etc.
+
+**Pick rows for your card**
+
+1. **Primary row (real-time):**
+
+   * Choose the *next trip* that has **TripUpdate** data for this stop.
+   * If it’s canceled or skipped → headline shows **CANCELLED**, and you jump to the next real-time candidate (if any) as the primary; keep this one as a red advisory line if you want.
+   * Otherwise, ETA = `max(0, predictedEpoch - now)`.
+   * Show:
+
+     * Big: `ETA “7 min”` (for your “2 min scheduled + 5 min late” example, *ETA becomes 7*).
+     * Small badge: **“5 min late”** in red (if `delaySec ≥ 60`).
+     * Optional: muted “Sched 2 min” in gray; strikethrough if you want to be spicy.
+
+2. **Two secondary rows (static):**
+
+   * Pick the next two **scheduled** times after `now` **excluding** the real-time trip you just used.
+   * Show them as plain “12:18 • Scheduled” in gray.
+   * If you *also* happen to have TripUpdates for those, you can subtle-annotate (“+3m”)—but you said you want them static, so keep them static for now.
+
+**Edge cases you must handle**
+
+* **Stale feed**: if `feed.header.timestamp` is > 180s old → hide delay badge, label the headline “Real-time temporarily unavailable,” and show scheduled only.
+* **Early buses**: If `delaySec ≤ −60`, show **“1–2 min early”** in neutral/blue. Don’t call it a delay.
+* **Cancellations**: If `CANCELED`/`SKIPPED`, the row should scream. Red label “Cancelled”, scheduled time in strike, and still show other options.
+* **Departure-only updates**: If arrival missing, use **departure**. Don’t drop a valid prediction because you only checked arrival.
+
+---
+
+## Kotlin mini-helpers (straight to the point)
+
+### 1) Choosing arrival vs departure
+
+```kotlin
+fun bestPrediction(stu: GtfsRealtime.TripUpdate.StopTimeUpdate)
+    : Pair<Long, Int>? {
+    val arr = if (stu.hasArrival()) stu.arrival else null
+    val dep = if (stu.hasDeparture()) stu.departure else null
+    val time = when {
+        arr?.hasTime() == true -> arr.time
+        dep?.hasTime() == true -> dep.time
+        else -> return null
+    }
+    val delay = listOfNotNull(
+        arr?.delay?.takeIf { arr.hasDelay() },
+        dep?.delay?.takeIf { dep.hasDelay() }
+    ).maxOrNull() ?: 0
+    return time to delay
+}
+```
+
+### 2) Compute the **primary** real-time row
+
+```kotlin
+data class ArrivalRow(
+    val headlineEtaMin: Int,      // e.g., 7
+    val delayMin: Int?,           // e.g., 5 (null if < 1 min or stale)
+    val scheduledEtaMin: Int?,    // e.g., 2 (for the tiny gray text)
+    val status: Status,           // NORMAL, CANCELLED, NO_REALTIME
+    val tripId: String?
+)
+enum class Status { NORMAL, CANCELLED, NO_REALTIME }
+
+fun buildPrimaryRealtimeRow(
+    now: Long,
+    candidates: List<Candidate>, // your prefiltered stop/route arrivals with scheduled+tripUpdate
+    feedTimestamp: Long?         // header.timestamp (epoch sec)
+): ArrivalRow? {
+    val fresh = feedTimestamp != null && now - feedTimestamp!! <= 180
+    val rt = candidates.firstOrNull { it.hasTripUpdate && !it.isCanceled && it.predictedEpoch!! >= now }
+        ?: candidates.firstOrNull { it.isCanceled }?.let {
+            return ArrivalRow(
+                headlineEtaMin = 0,
+                delayMin = null,
+                scheduledEtaMin = ((it.scheduledEpoch - now).coerceAtLeast(0) / 60).toInt(),
+                status = Status.CANCELLED,
+                tripId = it.tripId
+            )
+        } ?: return null
+
+    val etaMin = ((rt.predictedEpoch!! - now).coerceAtLeast(0) / 60).toInt()
+    val schedMin = ((rt.scheduledEpoch - now).coerceAtLeast(0) / 60).toInt()
+    val delayMin = (rt.delaySec ?: (rt.predictedEpoch - rt.scheduledEpoch).toInt()) / 60
+
+    val showDelay = fresh && kotlin.math.abs(delayMin) >= 1
+    return ArrivalRow(
+        headlineEtaMin = etaMin,
+        delayMin = if (showDelay) delayMin else null,
+        scheduledEtaMin = schedMin,
+        status = Status.NORMAL,
+        tripId = rt.tripId
+    )
+}
+```
+
+### 3) Pick **two static** follow-ups
+
+```kotlin
+fun nextTwoScheduled(
+    now: Long,
+    scheduleOnly: List<ScheduledItem>, // future scheduled stop_times for this stop/route
+    excludeTripId: String?
+): List<ScheduledItem> =
+    scheduleOnly
+        .filter { it.epoch >= now && it.tripId != excludeTripId }
+        .sortedBy { it.epoch }
+        .take(2)
+```
+
+---
+
+## UI copy (what the rider sees)
+
+* **Primary (big)**: `7 min`
+* **Small red badge**: `5 min late`  (only if delay ≥ 1 min and feed fresh)
+* **Muted microcopy**: `Sched 2 min`  (optional, gray text)
+* **Secondaries**:
+
+  * `12:18 — Scheduled`
+  * `12:33 — Scheduled`
+
+**If canceled**:
+
+* Headline pill: **Cancelled** (red)
+* Under it: `Sched 2 min` (struck-through), then still show the next two scheduled.
+
+**If early**:
+
+* Badge becomes neutral: `2 min early` (no red; don’t scare folks with “negative delay”)
+
+**If stale**:
+
+* Hide badge. Show small gray line: `Real-time temporarily unavailable`. Keep the two scheduled times.
+
+---
+
+## Your specific example, interpreted
+
+> “Supposed to arrive in 2 minutes, but delayed about 5 minutes.”
+
+* Scheduled ETA: **2 min**
+* Delay: **+5 min**
+* Predicted ETA: **7 min**
+* Display:
+
+  * Big: **7 min**
+  * Red badge: **5 min late**
+  * Gray microcopy: **Sched 2 min**
+  * Secondary scheduled rows: next two future schedule slots (unchanged).
+
+That’s clean, honest, and impossible to misread. You’re not “over-correcting” the schedule; you’re surfacing reality while keeping context visible.
+
+---
+
+If you want, I can turn those helpers into a tidy `ArrivalCardFormatter.kt` you can drop in later, with a one-liner `renderArrivalCard(stopId, routeId)` that returns a view model for your Compose.
+
+
+Ignore everything below this line.
+
+Heck yes, let’s tune your **Service Alerts** and how you wire them. I compared what you shipped to common open-source patterns (OTP, OneBusAway) and the GTFS-RT spec. You’re close, but a few gotchas are kneecapping your alerts.
+
+# What you’re doing now (and why it bites)
+
+1. **Only mapping `route_id`**
+   Your parser ignores `trip_id` and agency-wide alerts. So any alert scoped to *trips* or the *whole agency* vanishes. See where you collect only `informedEntity.route_id`.
+
+2. **Guessing the alert type from description text**
+   You infer DETOUR/DELAY/etc by keyword sniffing instead of using the protobuf’s **`alert.effect`** enum. That’s fragile and misses cases like “REDUCED_SERVICE”.
+   Spec + examples show you should trust `effect` (and `cause`) directly. ([General Transit Feed Specification][1])
+
+3. **Only the first `active_period`**
+   You read period #0 and drop the rest. Agencies often stack multiple windows (weekend only, overnight work, etc.).
+   Best practice: an alert is “active” if **now** falls in *any* period. ([General Transit Feed Specification][1])
+
+4. **Translations: first only**
+   You always take translation[0]. If Windsor ever ships multiple locales, pick the best match (e.g., `en` fallback).
+
+5. **UI only lights the icon for Service Alerts**
+   Your route list warning icon checks only `hasActiveAlerts(shortName)`. Delays/cancellations coming from **TripUpdates** never light it up.
+   OTP/others surface “operational” status from TripUpdates (delay/cancel) in addition to formal alerts. ([OpenTripPlanner][2])
+
+6. **Arrival-only parsing in TripUpdates**
+   Your merge ignores departure-only predictions; several feeds publish departure timestamps. You currently require `stopTimeUpdate.hasArrival()`.
+   OTP treats either arrival **or** departure as valid prediction. ([OpenTripPlanner][2])
+
+7. **No staleness guard**
+   You cache alerts 60s (fine), but you never check the feed header timestamp to suppress stale “ghost” alerts.
+   Common pattern: ignore/label realtime if header timestamp is older than a threshold. ([OpenTripPlanner][3])
+
+8. **Retrofit client is ultra-bare**
+   No timeouts, no User-Agent, no protobuf-aware logging; also you pass a dummy `t` query to bust caches (fine), but no error body/size checks.
+   Bindings + javadoc reference for the fields you’re ignoring lives here. ([GitHub][4])
+
+# Concrete upgrades (surgical)
+
+### A) Parse `trip_id` and agency-wide alerts → map back to routes
+
+* Build `tripId→routeId→shortName` once (you’ve already got these maps in VM).
+* If `informed_entity.trip.trip_id` exists, resolve its route and include that short name.
+* If **no informed entities**, treat as agency-wide: affect *all* routes.
+
+> Drop-in spot: your `parseServiceAlerts(...)` in `TransitViewModel`.
+
+### B) Use the protobuf’s `effect` (and `cause`) before keyword sniffing
+
+* Map `alert.effect` to your `AlertType` first; then fallback to your text keywords only if effect is `UNKNOWN`.
+  (Spec & examples show canonical values like DETOUR, NO_SERVICE, REDUCED_SERVICE, STOP_MOVED, SIGNIFICANT_DELAYS.) ([General Transit Feed Specification][1])
+
+### C) Respect **all** active periods
+
+* Compute `isActive = periods.isEmpty() || periods.any { nowSec in [start..end] }`.
+* Your current single-period read is here; swap it to iterate.
+
+### D) Translation choice
+
+* Prefer translation whose `language` matches device locale; fallback to first.
+  (Right now you always grab index 0.)
+
+### E) Promote TripUpdates to “operational warnings”
+
+* Keep your formal alert icon, **but** also compute route-level ops: max delay and any cancellations for the route (derived from TripUpdates). If either is significant (say, ≥5 min or canceled), light the same icon and show a short summary under the route name when there’s no formal alert.
+* That matches OTP/industry behavior where service alerts and trip status coexist. ([OpenTripPlanner][2])
+  (You’re already close; just add a small aggregator over `_tripUpdates` keyed by route shortName.)
+
+### F) Accept departure-only predictions
+
+* When building your realtime map, pick arrival if present, else departure; and pick the **max** delay of the two when both present. Replace the `hasArrival()` hard gate.
+
+### G) Stale-feed guard
+
+* Before caching/using alerts or trip updates, check `feed.header.timestamp` and mark feeds stale if older than X (180s for TripUpdates, 2h for Alerts). If stale, don’t light icons or print delay badges.  ([OpenTripPlanner][3])
+
+### H) Network hygiene (quality-of-life)
+
+* Add reasonable OkHttp timeouts + User-Agent header. Log header timestamp, entity counts, and payload size for debugging.
+
+# “Is this what the big kids do?”
+
+* **OpenTripPlanner**: splits updaters for Alerts vs TripUpdates, polls regularly, and treats both as rider-visible state. Their docs emphasize alert scope via selectors and separate trip status. ([OpenTripPlanner][3])
+* **OneBusAway**: demo visualizer shows canonical consumption of GTFS-RT and is a handy sanity check when you think your code is right but *nothing* shows. ([GitHub][5])
+* **Spec**: says use `EntitySelector` for route/trip/stop/agency scoping and use `effect`/`cause` for semantics. You’re leaving this money on the table. ([General Transit Feed Specification][6])
+
+# Quick code pointers (where to patch)
+
+* **Service Alerts parse**: add trip/agency mapping + effect enum + multi-period + locale choice here: `parseServiceAlerts(...)`.
+* **Icon logic**: currently `hasActiveAlerts(route.shortName)` in `MapScreen`. Add a new `hasAnyIssues(shortName)` that ORs service alerts with computed route-level ops.
+* **TripUpdates merge**: swap arrival-only to arrival-or-departure in `TransitRepository.getMergedArrivalsForStop`.
+* **Staleness**: check `feed.header.timestamp` in `TransitRepository.getServiceAlerts()` / `getCachedTripUpdates()` before trusting the data.
+
+# Sanity-check tools while you iterate
+
+When Windsor posts a detour and you still see nothing, verify the feed itself with a neutral tool so you’re not debugging ghosts:
+
+* **GTFS-RT Reference & examples** (compare fields against your objects). ([General Transit Feed Specification][1])
+* **OneBusAway GTFS-RT Visualizer** (see entities arrive live; no Kotlin involved). ([GitHub][5])
+
+You’re on the right track, Kieran. Patch the four biggies—trip/agency scope, effect enum, multi-period, and arrival-or-departure—and your alerts will start behaving like they actually want riders to see them. Then sprinkle the route-level “ops” signal and stale guards, and your app will feel pro.
+
+[1]: https://gtfs.org/documentation/realtime/reference/?utm_source=chatgpt.com "GTFS Realtime Reference"
+[2]: https://docs.opentripplanner.org/en/v2.2.0/UpdaterConfig/?utm_source=chatgpt.com "Realtime Updaters"
+[3]: https://docs.opentripplanner.org/en/latest/GTFS-RT-Config/?utm_source=chatgpt.com "GTFS-RT"
+[4]: https://github.com/MobilityData/gtfs-realtime-bindings?utm_source=chatgpt.com "MobilityData/gtfs-realtime-bindings"
+[5]: https://github.com/OneBusAway/onebusaway-gtfs-realtime-visualizer?utm_source=chatgpt.com "OneBusAway/onebusaway-gtfs-realtime-visualizer"
+[6]: https://gtfs.org/documentation/realtime/feed-entities/service-alerts/?utm_source=chatgpt.com "Service Alerts"

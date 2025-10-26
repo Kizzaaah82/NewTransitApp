@@ -29,14 +29,11 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.toColorInt
 import androidx.navigation.NavController
 import com.google.android.gms.location.LocationServices
-import com.google.android.gms.maps.model.LatLng
 import com.kiz.transitapp.ui.util.haversineDistance
 import com.kiz.transitapp.ui.viewmodel.TransitViewModel
 import com.kiz.transitapp.ui.viewmodel.BusStop
 import com.kiz.transitapp.ui.navigation.Screen
 import com.kiz.transitapp.ui.theme.PastelRed
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlin.math.*
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -450,7 +447,7 @@ fun NearbyStopCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Real-time arrival information
+            // Real-time arrival information - now using standardized component
             if (isLoadingArrivals) {
                 Text(
                     text = "Loading arrivals...",
@@ -458,62 +455,13 @@ fun NearbyStopCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else if (arrivals.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     arrivals.take(3).forEach { arrival ->
-                        if (arrival.isRealTime) {
-                            // Real-time arrival with delay information
-                            val currentDate = java.time.LocalDate.now()
-                            val windsorTimeZone = java.time.ZoneId.of("America/Toronto")
-                            val now = java.time.ZonedDateTime.now(windsorTimeZone)
-
-                            val todayArrival = java.time.ZonedDateTime.of(currentDate, arrival.arrivalTime, windsorTimeZone)
-                            val tomorrowArrival = todayArrival.plusDays(1)
-
-                            val actualArrival = if (todayArrival.isAfter(now)) {
-                                todayArrival
-                            } else {
-                                tomorrowArrival
-                            }
-
-                            val minutesUntil = java.time.Duration.between(now, actualArrival).toMinutes()
-
-                            val displayText = when {
-                                minutesUntil < 0 -> "Due"
-                                minutesUntil == 0L -> "Due"
-                                minutesUntil == 1L -> "1 min"
-                                minutesUntil < 60 -> "${minutesUntil.toInt()} mins"
-                                else -> actualArrival.format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
-                            }
-
-                            val delayText = when {
-                                arrival.delaySeconds > 60 -> " (${arrival.delaySeconds / 60} min late)"
-                                arrival.delaySeconds < -60 -> " (${(-arrival.delaySeconds) / 60} min early)"
-                                arrival.delaySeconds > 30 -> " (late)"
-                                arrival.delaySeconds < -30 -> " (early)"
-                                else -> " (on time)"
-                            }
-
-                            Text(
-                                text = "$displayText$delayText",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = when {
-                                    arrival.delaySeconds > 60 -> MaterialTheme.colorScheme.error
-                                    arrival.delaySeconds < -60 -> Color(0xFF4CAF50)
-                                    else -> MaterialTheme.colorScheme.primary
-                                }
-                            )
-                        } else {
-                            // Static arrival time
-                            val formattedTime = arrival.arrivalTime.format(
-                                java.time.format.DateTimeFormatter.ofPattern("h:mm a")
-                            )
-                            Text(
-                                text = formattedTime,
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
+                            arrival = arrival,
+                            viewModel = viewModel,
+                            isCompact = true
+                        )
                     }
                 }
             } else {

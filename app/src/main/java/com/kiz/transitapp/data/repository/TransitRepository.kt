@@ -27,7 +27,8 @@ data class MergedArrivalTime(
     val scheduledTime: LocalTime, // The original timetable time
     val arrivalTime: LocalTime,   // The predicted real-time or scheduled time
     val isRealTime: Boolean,
-    val delaySeconds: Int
+    val delaySeconds: Int,
+    val isFeedFresh: Boolean = true // Whether the real-time feed is fresh
 )
 
 class TransitRepository(private val context: Context) {
@@ -43,9 +44,47 @@ class TransitRepository(private val context: Context) {
 
     private val CACHE_DURATION_MS = 5_000 // 5 seconds cache - ensures fresh data on 10-second map polling
     private val ALERTS_CACHE_DURATION_MS = 60_000 // 60 seconds cache - alerts don't change frequently
+    private val FEED_STALENESS_THRESHOLD_MS = 5 * 60 * 1000 // 5 minutes - reject feeds older than this
 
     // Use correct timezone from agency.txt
     private val windsorTimeZone = ZoneId.of("America/New_York")
+
+    /**
+     * Check if a GTFS-RT feed is stale based on its header timestamp
+     */
+    private fun isFeedStale(feed: FeedMessage): Boolean {
+        if (!feed.hasHeader() || !feed.header.hasTimestamp()) {
+            Log.w("TransitRepository", "Feed missing header or timestamp - treating as potentially stale")
+            return false // Don't reject feeds without timestamps, but log warning
+        }
+
+        val feedTimestamp = feed.header.timestamp * 1000 // Convert from seconds to milliseconds
+        val currentTime = System.currentTimeMillis()
+        val age = currentTime - feedTimestamp
+
+        if (age > FEED_STALENESS_THRESHOLD_MS) {
+            Log.w("TransitRepository", "Feed is stale: ${age / 1000} seconds old (threshold: ${FEED_STALENESS_THRESHOLD_MS / 1000}s)")
+            return true
+        }
+
+        return false
+    }
+
+    /**
+     * Check if a GTFS-RT feed is fresh enough to show LIVE badges (< 180 seconds old)
+     */
+    private fun isFeedFresh(feed: FeedMessage?): Boolean {
+        if (feed == null || !feed.hasHeader() || !feed.header.hasTimestamp()) {
+            return false
+        }
+
+        val feedTimestamp = feed.header.timestamp * 1000 // Convert from seconds to milliseconds
+        val currentTime = System.currentTimeMillis()
+        val age = currentTime - feedTimestamp
+
+        // Fresh if less than 180 seconds (3 minutes) old
+        return age < 180_000
+    }
 
     /**
      * Enhanced function to get real-time arrivals with proper formatting for UI display.
@@ -61,17 +100,41 @@ class TransitRepository(private val context: Context) {
         // 2. Fetch the latest real-time trip updates from the cache or API.
         val tripUpdates = getCachedTripUpdates()
 
+        // 2a. Check if the feed is fresh (< 180 seconds old)
+        val feedFresh = isFeedFresh(tripUpdates)
+
         // 3. Process real-time updates into an easy-to-use map for quick lookups.
         val realTimeUpdateMap = mutableMapOf<String, Pair<Long, Int>>() // Key: TripId, Value: Pair(ArrivalTimeUnix, DelaySeconds)
         tripUpdates?.entityList?.forEach { entity ->
             if (entity.hasTripUpdate()) {
                 val tripUpdate = entity.tripUpdate
                 tripUpdate.stopTimeUpdateList.forEach { stopTimeUpdate ->
-                    if (stopTimeUpdate.stopId == stopId && stopTimeUpdate.hasArrival()) {
-                        val arrivalInfo = stopTimeUpdate.arrival
+                    if (stopTimeUpdate.stopId == stopId) {
                         val tripId = tripUpdate.trip.tripId
                         if (tripId.isNotBlank()) {
-                            realTimeUpdateMap[tripId] = Pair(arrivalInfo.time, arrivalInfo.delay)
+                            // Accept EITHER arrival OR departure (or both)
+                            val hasArrival = stopTimeUpdate.hasArrival()
+                            val hasDeparture = stopTimeUpdate.hasDeparture()
+
+                            if (hasArrival || hasDeparture) {
+                                // Prefer arrival, fall back to departure
+                                val timeInfo = when {
+                                    hasArrival && hasDeparture -> {
+                                        // Both present: use arrival time, but take max delay
+                                        val arrivalDelay = stopTimeUpdate.arrival.delay
+                                        val departureDelay = stopTimeUpdate.departure.delay
+                                        val maxDelay = maxOf(arrivalDelay, departureDelay)
+                                        Pair(stopTimeUpdate.arrival.time, maxDelay)
+                                    }
+                                    hasArrival -> {
+                                        Pair(stopTimeUpdate.arrival.time, stopTimeUpdate.arrival.delay)
+                                    }
+                                    else -> { // hasDeparture
+                                        Pair(stopTimeUpdate.departure.time, stopTimeUpdate.departure.delay)
+                                    }
+                                }
+                                realTimeUpdateMap[tripId] = timeInfo
+                            }
                         }
                     }
                 }
@@ -102,7 +165,8 @@ class TransitRepository(private val context: Context) {
                             scheduledTime = staticArrival.arrivalTime,
                             arrivalTime = realTimeArrival,
                             isRealTime = true,
-                            delaySeconds = delaySeconds
+                            delaySeconds = delaySeconds,
+                            isFeedFresh = feedFresh
                         )
                     )
                 }
@@ -117,7 +181,8 @@ class TransitRepository(private val context: Context) {
                             scheduledTime = staticArrival.arrivalTime,
                             arrivalTime = staticArrival.arrivalTime,
                             isRealTime = false,
-                            delaySeconds = 0
+                            delaySeconds = 0,
+                            isFeedFresh = true // Static arrivals are always "fresh"
                         )
                     )
                 }
@@ -125,25 +190,46 @@ class TransitRepository(private val context: Context) {
         }
 
         // 5. Sort and organize: 1 real-time + 2 static times per route
+        // IMPORTANT: realTimeArrivals and staticOnlyArrivals should NEVER have the same tripId
+        // because we separate them in step 4. But we still need to organize by route.
+
+        // Group by route to ensure proper distribution
         val groupedByRoute = (realTimeArrivals + staticOnlyArrivals)
-            .sortedBy { it.arrivalTime }
             .groupBy { it.routeId }
 
         groupedByRoute.forEach { (routeId, arrivals) ->
+            // Separate real-time and static (they should already be separate, but be explicit)
             val realTime = arrivals.filter { it.isRealTime }.take(1)
             val static = arrivals.filter { !it.isRealTime }.take(2)
 
-            // Add 1 real-time if available
-            mergedList.addAll(realTime)
+            // DEBUG: Log what we're adding for this route
+            Log.d("TransitRepository", "Route $routeId - RT count: ${realTime.size}, Static count: ${static.size}")
+            realTime.forEach { rt ->
+                Log.d("TransitRepository", "  RT: Trip ${rt.tripId} @ ${rt.arrivalTime} (delay: ${rt.delaySeconds}s, scheduled: ${rt.scheduledTime})")
+            }
+            static.forEach { st ->
+                Log.d("TransitRepository", "  Static: Trip ${st.tripId} @ ${st.arrivalTime}")
+            }
 
-            // Fill remaining slots with static times, ensuring we don't exceed 3 total per route
-            val remainingSlots = 3 - realTime.size
-            mergedList.addAll(static.take(remainingSlots))
+            // Check for same arrival time but different trips (this is valid!)
+            if (realTime.isNotEmpty()) {
+                val rtTime = realTime[0].arrivalTime
+                val duplicateTimeStatic = static.filter { it.arrivalTime == rtTime }
+                if (duplicateTimeStatic.isNotEmpty()) {
+                    Log.w("TransitRepository", "Route $routeId: Real-time at $rtTime (trip ${realTime[0].tripId}) and ${duplicateTimeStatic.size} static arrival(s) also at $rtTime (trips: ${duplicateTimeStatic.map { it.tripId }})")
+                }
+            }
+
+            // Add in specific order: 1 real-time FIRST, then 2 static
+            // Do NOT sort after this - preserve the RT-first ordering!
+            mergedList.addAll(realTime)
+            mergedList.addAll(static)
         }
 
-        return@withContext mergedList
-            .sortedBy { it.arrivalTime }
-            .distinctBy { "${it.routeId}_${it.tripId}" }
+        // Final deduplication as safety net - should not be needed if logic above is correct
+        val result = mergedList.distinctBy { "${it.routeId}_${it.tripId}" }
+        Log.d("TransitRepository", "getMergedArrivalsForStop: Returning ${result.size} arrivals (from ${mergedList.size} before dedup)")
+        return@withContext result
     }
 
     // =========================================================================
@@ -265,12 +351,26 @@ class TransitRepository(private val context: Context) {
     private suspend fun getCachedTripUpdates(): FeedMessage? {
         val currentTime = System.currentTimeMillis()
         if (cachedTripUpdates != null && (currentTime - lastTripUpdateTime) < CACHE_DURATION_MS) {
-            return cachedTripUpdates
+            // Check if cached feed is stale
+            if (isFeedStale(cachedTripUpdates!!)) {
+                Log.w("TransitRepository", "Cached trip updates feed is stale, fetching fresh data")
+                cachedTripUpdates = null // Force refresh
+            } else {
+                return cachedTripUpdates
+            }
         }
         return try {
             val response = apiService.getTripUpdates()
             if (response.isSuccessful && response.body() != null) {
-                cachedTripUpdates = FeedMessage.parseFrom(response.body()!!.byteStream())
+                val feed = FeedMessage.parseFrom(response.body()!!.byteStream())
+
+                // Check staleness before accepting new feed
+                if (isFeedStale(feed)) {
+                    Log.w("TransitRepository", "Received stale trip updates feed from API")
+                    // Still cache it but log the warning - better than nothing
+                }
+
+                cachedTripUpdates = feed
                 lastTripUpdateTime = currentTime
                 cachedTripUpdates
             } else {
@@ -286,11 +386,22 @@ class TransitRepository(private val context: Context) {
     suspend fun getVehiclePositions(): FeedMessage {
         val currentTime = System.currentTimeMillis()
         if (cachedVehiclePositions != null && (currentTime - lastVehicleUpdateTime) < CACHE_DURATION_MS) {
-            return cachedVehiclePositions!!
+            // Check if cached feed is stale
+            if (!isFeedStale(cachedVehiclePositions!!)) {
+                return cachedVehiclePositions!!
+            }
+            Log.w("TransitRepository", "Cached vehicle positions feed is stale, fetching fresh data")
         }
         val response = apiService.getVehiclePositions()
         if (response.isSuccessful && response.body() != null) {
-            cachedVehiclePositions = FeedMessage.parseFrom(response.body()!!.byteStream())
+            val feed = FeedMessage.parseFrom(response.body()!!.byteStream())
+
+            // Check staleness before accepting new feed
+            if (isFeedStale(feed)) {
+                Log.w("TransitRepository", "Received stale vehicle positions feed from API")
+            }
+
+            cachedVehiclePositions = feed
             lastVehicleUpdateTime = currentTime
             return cachedVehiclePositions!!
         } else {
@@ -305,12 +416,26 @@ class TransitRepository(private val context: Context) {
     suspend fun getServiceAlerts(): FeedMessage {
         val currentTime = System.currentTimeMillis()
         if (cachedServiceAlerts != null && (currentTime - lastServiceAlertsUpdateTime) < ALERTS_CACHE_DURATION_MS) {
-            return cachedServiceAlerts!!
+            // Check if cached feed is stale
+            if (isFeedStale(cachedServiceAlerts!!)) {
+                Log.w("TransitRepository", "Cached service alerts feed is stale, fetching fresh data")
+                cachedServiceAlerts = null // Force refresh
+            } else {
+                return cachedServiceAlerts!!
+            }
         }
         return try {
             val response = apiService.getServiceAlerts()
             if (response.isSuccessful && response.body() != null) {
-                cachedServiceAlerts = FeedMessage.parseFrom(response.body()!!.byteStream())
+                val feed = FeedMessage.parseFrom(response.body()!!.byteStream())
+
+                // Check staleness before accepting new feed
+                if (isFeedStale(feed)) {
+                    Log.w("TransitRepository", "Received stale service alerts feed from API")
+                    // Still use it but log the warning
+                }
+
+                cachedServiceAlerts = feed
                 lastServiceAlertsUpdateTime = currentTime
                 cachedServiceAlerts!!
             } else {

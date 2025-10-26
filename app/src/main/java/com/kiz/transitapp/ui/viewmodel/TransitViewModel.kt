@@ -38,7 +38,8 @@ data class StopArrivalTime(
     val arrivalTime: LocalTime,
     val isRealTime: Boolean,
     val delaySeconds: Int = 0, // Delay in seconds (positive = late, negative = early)
-    val scheduledTime: LocalTime? = null // Original scheduled time for real-time arrivals
+    val scheduledTime: LocalTime? = null, // Original scheduled time for real-time arrivals
+    val isFeedFresh: Boolean = true // Whether the real-time feed is fresh (<180s old)
 )
 
 data class TimetableEntry(
@@ -62,26 +63,35 @@ data class VehiclePositionInfo(
 
 
 // Service Alert from GTFS-Realtime (official transit agency alerts)
+// Service Alert from GTFS-Realtime (official transit agency alerts)
 data class ServiceAlert(
     val alertId: String,
-    val affectedRoutes: List<String>, // Route IDs affected
+    val affectedRoutes: List<String>, // Route SHORT NAMES (not route_id!) - normalized during parsing for UI consistency
     val headerText: String,
     val descriptionText: String,
     val alertType: AlertType,
     val severity: AlertSeverity,
     val activePeriodStart: Long? = null,
     val activePeriodEnd: Long? = null,
+    val activePeriods: List<Pair<Long?, Long?>> = listOf(Pair(activePeriodStart, activePeriodEnd)), // All active time windows
     val lastUpdated: Long = System.currentTimeMillis()
 )
 
 enum class AlertType {
+    NO_SERVICE,
+    REDUCED_SERVICE,
+    SIGNIFICANT_DELAYS,
     DETOUR,
-    DELAY,
+    ADDITIONAL_SERVICE,
+    MODIFIED_SERVICE,
     STOP_MOVED,
     STOP_CLOSED,
+    OTHER_EFFECT,
+    UNKNOWN_EFFECT,
+    // Legacy types for backwards compatibility
+    DELAY,
     SERVICE_CHANGE,
-    OTHER,
-    UNKNOWN
+    OTHER
 }
 
 enum class AlertSeverity {
@@ -89,6 +99,21 @@ enum class AlertSeverity {
     INFO,
     WARNING,
     SEVERE
+}
+
+// Operational warnings derived from TripUpdates (not formal alerts)
+data class OperationalWarning(
+    val routeId: String,
+    val warningType: OperationalWarningType,
+    val delayMinutes: Int,
+    val affectedTrips: Int,
+    val lastUpdated: Long = System.currentTimeMillis()
+)
+
+enum class OperationalWarningType {
+    SIGNIFICANT_DELAYS,  // Multiple trips running >10 min late
+    MODERATE_DELAYS,     // Multiple trips running 5-10 min late
+    TRIP_CANCELLATION    // Trip cancelled (SKIPPED schedule relationship)
 }
 
 data class FavoriteStopWithArrivals(
@@ -189,6 +214,10 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
     // Service alerts from GTFS-Realtime API (official transit agency alerts)
     private val _serviceAlerts = MutableStateFlow<List<ServiceAlert>>(emptyList())
     val serviceAlerts: StateFlow<List<ServiceAlert>> = _serviceAlerts
+
+    // Operational warnings derived from TripUpdates (delays, cancellations)
+    private val _operationalWarnings = MutableStateFlow<List<OperationalWarning>>(emptyList())
+    val operationalWarnings: StateFlow<List<OperationalWarning>> = _operationalWarnings
 
     private val _stopArrivalTimes = MutableStateFlow<List<StopArrivalTime>>(emptyList())
     val stopArrivalTimes: StateFlow<List<StopArrivalTime>> = _stopArrivalTimes
@@ -531,23 +560,172 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
+     * Fetch and analyze TripUpdates to detect operational warnings
+     * (significant delays, cancellations not covered by formal alerts)
+     */
+    fun fetchOperationalWarnings() {
+        viewModelScope.launch {
+            try {
+                val tripUpdatesFeed = repository.getTripUpdates()
+                val warnings = extractOperationalWarnings(tripUpdatesFeed)
+                _operationalWarnings.value = warnings
+                Log.d("OperationalWarnings", "Detected ${warnings.size} operational warnings")
+            } catch (e: Exception) {
+                Log.e("OperationalWarnings", "Error extracting operational warnings: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Extract operational warnings from TripUpdates feed
+     * Detects: significant delays (>10 min), moderate delays (5-10 min), cancellations
+     */
+    private fun extractOperationalWarnings(feed: GtfsRealtime.FeedMessage?): List<OperationalWarning> {
+        if (feed == null) return emptyList()
+
+        val warnings = mutableListOf<OperationalWarning>()
+        val tripIdToRouteId = _tripIdToRouteId.value
+        val routeIdToShortName = _transitData.value?.routeIdToShortName ?: emptyMap()
+
+        // Group delays by route
+        val routeDelays = mutableMapOf<String, MutableList<Int>>() // route -> list of delays in seconds
+        val routeCancellations = mutableMapOf<String, Int>() // route -> count of cancelled trips
+
+        feed.entityList.forEach { entity ->
+            if (entity.hasTripUpdate()) {
+                val tripUpdate = entity.tripUpdate
+                val tripId = tripUpdate.trip.tripId
+
+                // Map trip to route
+                val gtfsRouteId = tripIdToRouteId[tripId]
+                val routeShortName = if (gtfsRouteId != null) {
+                    routeIdToShortName[gtfsRouteId] ?: gtfsRouteId
+                } else {
+                    null
+                }
+
+                if (routeShortName != null) {
+                    // Check for cancellations
+                    if (tripUpdate.trip.hasScheduleRelationship() &&
+                        tripUpdate.trip.scheduleRelationship == GtfsRealtime.TripDescriptor.ScheduleRelationship.CANCELED) {
+                        routeCancellations[routeShortName] = (routeCancellations[routeShortName] ?: 0) + 1
+                    }
+
+                    // Collect delays from stop time updates
+                    tripUpdate.stopTimeUpdateList.forEach { stopTimeUpdate ->
+                        val delay = when {
+                            stopTimeUpdate.hasArrival() -> stopTimeUpdate.arrival.delay
+                            stopTimeUpdate.hasDeparture() -> stopTimeUpdate.departure.delay
+                            else -> 0
+                        }
+
+                        // Only track significant delays (>5 minutes)
+                        if (delay > 300) { // 5 minutes in seconds
+                            routeDelays.getOrPut(routeShortName) { mutableListOf() }.add(delay)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Generate warnings for routes with significant delays
+        routeDelays.forEach { (routeId, delays) ->
+            if (delays.size >= 2) { // At least 2 delayed stop times to be significant
+                val avgDelay = delays.average().toInt()
+                val avgDelayMinutes = avgDelay / 60
+
+                when {
+                    avgDelayMinutes >= 10 -> {
+                        warnings.add(
+                            OperationalWarning(
+                                routeId = routeId,
+                                warningType = OperationalWarningType.SIGNIFICANT_DELAYS,
+                                delayMinutes = avgDelayMinutes,
+                                affectedTrips = delays.size
+                            )
+                        )
+                    }
+                    avgDelayMinutes >= 5 -> {
+                        warnings.add(
+                            OperationalWarning(
+                                routeId = routeId,
+                                warningType = OperationalWarningType.MODERATE_DELAYS,
+                                delayMinutes = avgDelayMinutes,
+                                affectedTrips = delays.size
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // Generate warnings for cancellations
+        routeCancellations.forEach { (routeId, count) ->
+            if (count > 0) {
+                warnings.add(
+                    OperationalWarning(
+                        routeId = routeId,
+                        warningType = OperationalWarningType.TRIP_CANCELLATION,
+                        delayMinutes = 0,
+                        affectedTrips = count
+                    )
+                )
+            }
+        }
+
+        return warnings
+    }
+
+    /**
      * Parse GTFS-Realtime service alerts feed
+     */
+    /**
+     * Parse GTFS-Realtime service alerts feed.
+     *
+     * NORMALIZATION STRATEGY:
+     * - GTFS-RT feeds use route_id from routes.txt
+     * - UI code uses route short_name (e.g., "1C", "2", "3")
+     * - We normalize route_id → short_name during parsing so:
+     *   1. ServiceAlert.affectedRoutes contains SHORT NAMES
+     *   2. UI can call getAlertsForRoute(shortName) directly
+     *   3. No translation needed at query time
+     * - If route_id == short_name (common case), this is transparent
+     * - If they differ, this prevents silently dropping alerts
      */
     private fun parseServiceAlerts(feed: com.google.transit.realtime.GtfsRealtime.FeedMessage): List<ServiceAlert> {
         val alerts = mutableListOf<ServiceAlert>()
         val routeIdToShortName = _transitData.value?.routeIdToShortName ?: emptyMap()
+        val tripIdToRouteId = _tripIdToRouteId.value
+        val allRouteShortNames = routeIdToShortName.values.toSet()
 
         feed.entityList.forEach { entity ->
             if (entity.hasAlert()) {
                 val alert = entity.alert
 
-                // Extract affected routes
-                val affectedRoutes = mutableListOf<String>()
-                alert.informedEntityList.forEach { informedEntity ->
-                    if (informedEntity.hasRouteId()) {
-                        // Convert GTFS route ID to short name
-                        val shortName = routeIdToShortName[informedEntity.routeId] ?: informedEntity.routeId
-                        affectedRoutes.add(shortName)
+                // Extract affected routes and NORMALIZE to short names
+                // This ensures UI code can query by short name without translation
+                val affectedRoutes = mutableSetOf<String>()
+
+                if (alert.informedEntityList.isEmpty()) {
+                    // No informed entities = agency-wide alert affecting all routes
+                    affectedRoutes.addAll(allRouteShortNames)
+                } else {
+                    alert.informedEntityList.forEach { informedEntity ->
+                        // Handle route_id - NORMALIZE to short name
+                        if (informedEntity.hasRouteId()) {
+                            val shortName = routeIdToShortName[informedEntity.routeId] ?: informedEntity.routeId
+                            affectedRoutes.add(shortName)
+                        }
+
+                        // Handle trip_id by mapping back to route - NORMALIZE to short name
+                        if (informedEntity.hasTrip() && informedEntity.trip.hasTripId()) {
+                            val tripId = informedEntity.trip.tripId
+                            val routeId = tripIdToRouteId[tripId]
+                            if (routeId != null) {
+                                val shortName = routeIdToShortName[routeId] ?: routeId
+                                affectedRoutes.add(shortName)
+                            }
+                        }
                     }
                 }
 
@@ -564,46 +742,72 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
                     ""
                 }
 
-                // Determine alert type from description
-                val alertType = when {
-                    descriptionText.contains("detour", ignoreCase = true) -> AlertType.DETOUR
-                    descriptionText.contains("delay", ignoreCase = true) -> AlertType.DELAY
-                    descriptionText.contains("stop moved", ignoreCase = true) -> AlertType.STOP_MOVED
-                    descriptionText.contains("stop closed", ignoreCase = true) -> AlertType.STOP_CLOSED
-                    descriptionText.contains("service change", ignoreCase = true) -> AlertType.SERVICE_CHANGE
-                    else -> AlertType.OTHER
+                // Use protobuf effect enum FIRST, then fallback to keyword sniffing
+                val alertType = if (alert.hasEffect()) {
+                    when (alert.effect) {
+                        GtfsRealtime.Alert.Effect.NO_SERVICE -> AlertType.NO_SERVICE
+                        GtfsRealtime.Alert.Effect.REDUCED_SERVICE -> AlertType.REDUCED_SERVICE
+                        GtfsRealtime.Alert.Effect.SIGNIFICANT_DELAYS -> AlertType.SIGNIFICANT_DELAYS
+                        GtfsRealtime.Alert.Effect.DETOUR -> AlertType.DETOUR
+                        GtfsRealtime.Alert.Effect.ADDITIONAL_SERVICE -> AlertType.ADDITIONAL_SERVICE
+                        GtfsRealtime.Alert.Effect.MODIFIED_SERVICE -> AlertType.MODIFIED_SERVICE
+                        GtfsRealtime.Alert.Effect.STOP_MOVED -> AlertType.STOP_MOVED
+                        GtfsRealtime.Alert.Effect.OTHER_EFFECT -> AlertType.OTHER_EFFECT
+                        GtfsRealtime.Alert.Effect.UNKNOWN_EFFECT -> {
+                            // Fallback to keyword sniffing for unknown effects
+                            inferAlertTypeFromText(descriptionText)
+                        }
+                        else -> AlertType.UNKNOWN_EFFECT
+                    }
+                } else {
+                    // No effect field, use keyword sniffing
+                    inferAlertTypeFromText(descriptionText)
                 }
 
-                // Get severity - infer from alert type and description if not available
-                val severity = when {
-                    descriptionText.contains("severe", ignoreCase = true) ||
-                    descriptionText.contains("emergency", ignoreCase = true) -> AlertSeverity.SEVERE
-                    descriptionText.contains("warning", ignoreCase = true) ||
-                    alertType == AlertType.DETOUR -> AlertSeverity.WARNING
-                    descriptionText.contains("info", ignoreCase = true) -> AlertSeverity.INFO
-                    else -> AlertSeverity.UNKNOWN
+                // Get severity - use cause if available, otherwise infer
+                val severity = if (alert.hasCause()) {
+                    when (alert.cause) {
+                        GtfsRealtime.Alert.Cause.ACCIDENT,
+                        GtfsRealtime.Alert.Cause.STRIKE,
+                        GtfsRealtime.Alert.Cause.POLICE_ACTIVITY -> AlertSeverity.SEVERE
+                        GtfsRealtime.Alert.Cause.CONSTRUCTION,
+                        GtfsRealtime.Alert.Cause.MAINTENANCE,
+                        GtfsRealtime.Alert.Cause.TECHNICAL_PROBLEM -> AlertSeverity.WARNING
+                        else -> inferSeverityFromText(descriptionText, alertType)
+                    }
+                } else {
+                    inferSeverityFromText(descriptionText, alertType)
                 }
 
-                // Get active period
-                var startTime: Long? = null
-                var endTime: Long? = null
+                // Process ALL active periods (not just the first one)
+                val activePeriods = mutableListOf<Pair<Long?, Long?>>()
                 if (alert.activePeriodCount > 0) {
-                    val period = alert.getActivePeriod(0)
-                    startTime = if (period.hasStart()) period.start else null
-                    endTime = if (period.hasEnd()) period.end else null
+                    for (i in 0 until alert.activePeriodCount) {
+                        val period = alert.getActivePeriod(i)
+                        val start = if (period.hasStart()) period.start else null
+                        val end = if (period.hasEnd()) period.end else null
+                        activePeriods.add(Pair(start, end))
+                    }
+                } else {
+                    // No active periods means always active
+                    activePeriods.add(Pair(null, null))
                 }
+
+                // Store first period in main fields for backwards compatibility
+                val firstPeriod = activePeriods.firstOrNull() ?: Pair(null, null)
 
                 if (affectedRoutes.isNotEmpty()) {
                     alerts.add(
                         ServiceAlert(
                             alertId = entity.id,
-                            affectedRoutes = affectedRoutes,
+                            affectedRoutes = affectedRoutes.toList(),
                             headerText = headerText,
                             descriptionText = descriptionText,
                             alertType = alertType,
                             severity = severity,
-                            activePeriodStart = startTime,
-                            activePeriodEnd = endTime
+                            activePeriodStart = firstPeriod.first,
+                            activePeriodEnd = firstPeriod.second,
+                            activePeriods = activePeriods
                         )
                     )
                 }
@@ -614,7 +818,45 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Get all active service alerts for a specific route
+     * Infer alert type from description text (fallback when effect enum is unknown/missing)
+     */
+    private fun inferAlertTypeFromText(text: String): AlertType {
+        return when {
+            text.contains("detour", ignoreCase = true) -> AlertType.DETOUR
+            text.contains("delay", ignoreCase = true) -> AlertType.DELAY
+            text.contains("stop moved", ignoreCase = true) -> AlertType.STOP_MOVED
+            text.contains("stop closed", ignoreCase = true) -> AlertType.STOP_CLOSED
+            text.contains("no service", ignoreCase = true) -> AlertType.NO_SERVICE
+            text.contains("reduced service", ignoreCase = true) -> AlertType.REDUCED_SERVICE
+            text.contains("service change", ignoreCase = true) -> AlertType.SERVICE_CHANGE
+            else -> AlertType.OTHER
+        }
+    }
+
+    /**
+     * Infer severity from description text and alert type
+     */
+    private fun inferSeverityFromText(text: String, alertType: AlertType): AlertSeverity {
+        return when {
+            text.contains("severe", ignoreCase = true) ||
+            text.contains("emergency", ignoreCase = true) ||
+            alertType == AlertType.NO_SERVICE -> AlertSeverity.SEVERE
+            text.contains("warning", ignoreCase = true) ||
+            alertType == AlertType.DETOUR ||
+            alertType == AlertType.SIGNIFICANT_DELAYS -> AlertSeverity.WARNING
+            text.contains("info", ignoreCase = true) -> AlertSeverity.INFO
+            else -> AlertSeverity.UNKNOWN
+        }
+    }
+
+    /**
+     * Get all active service alerts for a specific route.
+     *
+     * IMPORTANT: Pass route SHORT NAME (e.g., "1C", "2", "3") - NOT the GTFS route_id!
+     * ServiceAlert.affectedRoutes contains short names, normalized during parsing.
+     *
+     * @param routeId The route SHORT NAME to query
+     * @return List of active ServiceAlert objects affecting this route
      */
     fun getAlertsForRoute(routeId: String): List<ServiceAlert> {
         val currentTime = System.currentTimeMillis() / 1000 // Convert to seconds
@@ -622,14 +864,15 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
             // Check if route is affected
             val isRouteAffected = alert.affectedRoutes.contains(routeId)
 
-            // Check if alert is currently active (within active period)
-            val isActive = when {
-                alert.activePeriodStart == null && alert.activePeriodEnd == null -> true // No time restriction
-                alert.activePeriodStart != null && alert.activePeriodEnd != null ->
-                    currentTime >= alert.activePeriodStart && currentTime <= alert.activePeriodEnd
-                alert.activePeriodStart != null -> currentTime >= alert.activePeriodStart
-                alert.activePeriodEnd != null -> currentTime <= alert.activePeriodEnd
-                else -> true
+            // Check if alert is currently active in ANY of its active periods
+            val isActive = alert.activePeriods.isEmpty() || alert.activePeriods.any { (start, end) ->
+                when {
+                    start == null && end == null -> true // No time restriction
+                    start != null && end != null -> currentTime >= start && currentTime <= end
+                    start != null -> currentTime >= start
+                    end != null -> currentTime <= end
+                    else -> true
+                }
             }
 
             isRouteAffected && isActive
@@ -637,17 +880,76 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Check if a route has any active detours
+     * Check if a route has any active detours.
+     *
+     * IMPORTANT: Pass route SHORT NAME (e.g., "1C", "2", "3") - NOT the GTFS route_id!
+     *
+     * @param routeId The route SHORT NAME to check
+     * @return true if any active detour alerts affect this route
      */
     fun hasActiveDetour(routeId: String): Boolean {
         return getAlertsForRoute(routeId).any { it.alertType == AlertType.DETOUR }
     }
 
     /**
-     * Check if a route has any active alerts (of any type)
+     * Check if a route has any active alerts (of any type).
+     *
+     * IMPORTANT: Pass route SHORT NAME (e.g., "1C", "2", "3") - NOT the GTFS route_id!
+     *
+     * @param routeId The route SHORT NAME to check
+     * @return true if any active alerts affect this route
      */
     fun hasActiveAlerts(routeId: String): Boolean {
         return getAlertsForRoute(routeId).isNotEmpty()
+    }
+
+    /**
+     * Get operational warnings for a specific route
+     */
+    fun getOperationalWarningsForRoute(routeId: String): List<OperationalWarning> {
+        return _operationalWarnings.value.filter { it.routeId == routeId }
+    }
+
+    /**
+     * Check if a route has operational warnings (delays or cancellations)
+     */
+    fun hasOperationalWarnings(routeId: String): Boolean {
+        return getOperationalWarningsForRoute(routeId).isNotEmpty()
+    }
+
+    /**
+     * HELPER: Get route short name from any identifier (route_id or shortName).
+     * Use this if you're unsure whether you have a route_id or shortName.
+     *
+     * @param identifier Could be either route_id (e.g., "ROUTE_1C") or shortName (e.g., "1C")
+     * @return The route short name, or the original identifier if not found
+     */
+    fun getRouteShortName(identifier: String): String {
+        val routeIdToShortName = _transitData.value?.routeIdToShortName ?: emptyMap()
+
+        // If it's already a shortName (in the values), return as-is
+        if (routeIdToShortName.containsValue(identifier)) {
+            return identifier
+        }
+
+        // If it's a route_id (in the keys), translate to shortName
+        if (routeIdToShortName.containsKey(identifier)) {
+            val shortName = routeIdToShortName[identifier]!!
+            Log.d("TransitViewModel", "Translated route_id '$identifier' to shortName '$shortName' for alert query")
+            return shortName
+        }
+
+        // Unknown identifier - log warning and return as-is
+        Log.w("TransitViewModel", "Unknown route identifier '$identifier' - using as-is for alert query. " +
+                "If alerts aren't showing, ensure you're passing route shortName not route_id")
+        return identifier
+    }
+
+    /**
+     * Check if a route has ANY issues (formal alerts OR operational warnings)
+     */
+    fun hasAnyIssues(routeId: String): Boolean {
+        return hasActiveAlerts(routeId) || hasOperationalWarnings(routeId)
     }
 
     /**
@@ -656,13 +958,15 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
     fun getAllActiveAlerts(): List<ServiceAlert> {
         val currentTime = System.currentTimeMillis() / 1000
         return _serviceAlerts.value.filter { alert ->
-            when {
-                alert.activePeriodStart == null && alert.activePeriodEnd == null -> true
-                alert.activePeriodStart != null && alert.activePeriodEnd != null ->
-                    currentTime >= alert.activePeriodStart && currentTime <= alert.activePeriodEnd
-                alert.activePeriodStart != null -> currentTime >= alert.activePeriodStart
-                alert.activePeriodEnd != null -> currentTime <= alert.activePeriodEnd
-                else -> true
+            // Check if alert is currently active in ANY of its active periods
+            alert.activePeriods.isEmpty() || alert.activePeriods.any { (start, end) ->
+                when {
+                    start == null && end == null -> true // No time restriction
+                    start != null && end != null -> currentTime >= start && currentTime <= end
+                    start != null -> currentTime >= start
+                    end != null -> currentTime <= end
+                    else -> true
+                }
             }
         }
     }
@@ -869,6 +1173,17 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
             while (true) {
                 delay(60_000) // Refresh every 60 seconds
                 fetchServiceAlerts()
+            }
+        }
+
+        // Set up automatic operational warnings extraction (every 30 seconds)
+        viewModelScope.launch {
+            // Fetch immediately on startup
+            fetchOperationalWarnings()
+
+            while (true) {
+                delay(30_000) // Refresh every 30 seconds (more frequent than alerts)
+                fetchOperationalWarnings()
             }
         }
     }
@@ -1708,7 +2023,8 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
                                     arrivalTime = arrival.arrivalTime,
                                     isRealTime = arrival.isRealTime,
                                     delaySeconds = arrival.delaySeconds,
-                                    scheduledTime = if (arrival.isRealTime) arrival.scheduledTime else null
+                                    scheduledTime = if (arrival.isRealTime) arrival.scheduledTime else null,
+                                    isFeedFresh = arrival.isFeedFresh
                                 )
                             }
 
@@ -1764,7 +2080,8 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
                         arrivalTime = arrival.arrivalTime,
                         isRealTime = arrival.isRealTime,
                         delaySeconds = arrival.delaySeconds,
-                        scheduledTime = if (arrival.isRealTime) arrival.scheduledTime else null
+                        scheduledTime = if (arrival.isRealTime) arrival.scheduledTime else null,
+                        isFeedFresh = arrival.isFeedFresh
                     )
                 }
             } catch (e: Exception) {
