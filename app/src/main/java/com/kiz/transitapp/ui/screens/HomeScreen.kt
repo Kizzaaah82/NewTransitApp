@@ -520,41 +520,17 @@ fun FavoriteStopCard(
                     }
                 }
 
-                // Real-time arrival information with limited display
+                // Real-time arrival information with simplified display
                 if (arrivals.isNotEmpty()) {
-                    // More intelligent service hours check - if there are static arrivals scheduled
-                    // for the next few hours, then real-time data should be valid
-                    val currentTime = java.time.LocalTime.now()
-                    val nextFewHours = currentTime.plusHours(3) // Check next 3 hours for scheduled service
+                    // Show first arrival as primary, next 2 as secondary
+                    val primaryArrival = arrivals.first()
+                    val nextArrivals = arrivals.drop(1).take(2)
 
-                    val hasScheduledService = arrivals.any { arrival ->
-                        !arrival.isRealTime && (
-                            arrival.arrivalTime.isAfter(currentTime) && arrival.arrivalTime.isBefore(nextFewHours) ||
-                            // Handle overnight service (e.g., 1am arrival when it's currently 11pm)
-                            (currentTime.hour > 21 && arrival.arrivalTime.hour < 6)
-                        )
-                    }
-
-                    // Separate real-time and static arrivals, but only filter real-time if no service is scheduled
-                    val realTimeArrivals = arrivals.filter { it.isRealTime && hasScheduledService }
-                    val staticArrivals = arrivals.filter { !it.isRealTime || !hasScheduledService }
-
-                    // Display logic: 1 real-time + 2 static, or 3 static if no valid real-time
-                    val arrivalsToShow = if (realTimeArrivals.isNotEmpty()) {
-                        // Show 1 real-time + 2 static
-                        realTimeArrivals.take(1) + staticArrivals.take(2)
-                    } else {
-                        // Show 3 static arrivals
-                        staticArrivals.take(3)
-                    }
-
-                    arrivalsToShow.forEach { arrival ->
-                        // Use standardized arrival time display component
-                        com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
-                            arrival = arrival,
-                            viewModel = viewModel
-                        )
-                    }
+                    com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
+                        arrival = primaryArrival,
+                        viewModel = viewModel,
+                        nextArrivals = nextArrivals
+                    )
                 } else {
                     Text(
                         text = "No upcoming arrivals",

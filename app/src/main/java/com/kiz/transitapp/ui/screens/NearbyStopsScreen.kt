@@ -455,15 +455,15 @@ fun NearbyStopCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else if (arrivals.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    arrivals.take(3).forEach { arrival ->
-                        com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
-                            arrival = arrival,
-                            viewModel = viewModel,
-                            isCompact = true
-                        )
-                    }
-                }
+                // Show first arrival as primary, next 2 as secondary
+                val primaryArrival = arrivals.first()
+                val nextArrivals = arrivals.drop(1).take(2)
+
+                com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
+                    arrival = primaryArrival,
+                    viewModel = viewModel,
+                    nextArrivals = nextArrivals
+                )
             } else {
                 Text(
                     text = "No upcoming arrivals",

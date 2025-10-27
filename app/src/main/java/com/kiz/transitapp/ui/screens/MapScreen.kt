@@ -523,21 +523,61 @@ fun MapScreen(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // Route Selection Section
-                        Text(
-                            text = "Select Route",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-
-                        // Route list - now using actual route data with names, always visible and scrollable
+                        // Everything in one scrollable LazyColumn
                         LazyColumn(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            // Show Live Buses Toggle - moved to top
+                            item {
+                                Column {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Show Live Buses",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Switch(
+                                            checked = showLiveBuses,
+                                            onCheckedChange = {
+                                                showLiveBuses = it
+                                                if (it) {
+                                                    viewModel.fetchVehiclePositions(mapTransitData.routeIdToShortName)
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    if (showLiveBuses) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = if (selectedRoute != null) {
+                                                "Showing buses for Route $selectedRoute"
+                                            } else {
+                                                "Showing buses for all routes"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    HorizontalDivider()
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    // Route Selection Section Header
+                                    Text(
+                                        text = "Select Route",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+
                             // Show loading state if routes are empty
                             if (mapTransitData.routes.isEmpty()) {
                                 item {
@@ -689,130 +729,95 @@ fun MapScreen(
                                     }
                                 }
                             }
-                        }
 
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider()
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Show Live Buses Toggle
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Show Live Buses",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Switch(
-                                checked = showLiveBuses,
-                                onCheckedChange = {
-                                    showLiveBuses = it
-                                    if (it) {
-                                        viewModel.fetchVehiclePositions(mapTransitData.routeIdToShortName)
-                                    }
-                                }
-                            )
-                        }
-
-                        if (showLiveBuses) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = if (selectedRoute != null) {
-                                    "Showing buses for Route $selectedRoute"
-                                } else {
-                                    "Showing buses for all routes"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        // Service Alerts Section - NEW
-                        selectedRoute?.let { routeId ->
-                            val routeAlerts = viewModel.getAlertsForRoute(routeId)
-                            if (routeAlerts.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(16.dp))
-                                HorizontalDivider()
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                // Alert header
-                                Text(
-                                    text = "Service Alerts",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                // Display each alert
-                                routeAlerts.forEach { alert ->
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp),
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
-                                        )
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.padding(12.dp)
-                                        ) {
-                                            // Alert header with icon
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Warning,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.error,
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(
-                                                    text = alert.headerText,
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = MaterialTheme.colorScheme.error
-                                                )
-                                            }
-
-                                            // Alert description
-                                            if (alert.descriptionText.isNotBlank()) {
-                                                Spacer(modifier = Modifier.height(8.dp))
-                                                Text(
-                                                    text = alert.descriptionText,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-
-                                            // Alert type badge
+                            // Service Alerts Section - now inside the LazyColumn for scrolling
+                            selectedRoute?.let { routeId ->
+                                val routeAlerts = viewModel.getAlertsForRoute(routeId)
+                                if (routeAlerts.isNotEmpty()) {
+                                    item {
+                                        Column {
                                             Spacer(modifier = Modifier.height(8.dp))
-                                            Row(
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            HorizontalDivider()
+                                            Spacer(modifier = Modifier.height(16.dp))
+
+                                            // Alert header
+                                            Text(
+                                                text = "Service Alerts",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Medium,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                        }
+                                    }
+
+                                    // Display each alert as separate items
+                                    items(routeAlerts) { alert ->
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 4.dp),
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                                            )
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(12.dp)
                                             ) {
-                                                // Alert type
-                                                Surface(
-                                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.2f),
-                                                    shape = RoundedCornerShape(4.dp)
+                                                // Alert header with icon
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    Text(
-                                                        text = when (alert.alertType) {
-                                                            com.kiz.transitapp.ui.viewmodel.AlertType.DETOUR -> "Detour"
-                                                            com.kiz.transitapp.ui.viewmodel.AlertType.DELAY -> "Delay"
-                                                            com.kiz.transitapp.ui.viewmodel.AlertType.STOP_CLOSED -> "Stop Closed"
-                                                            com.kiz.transitapp.ui.viewmodel.AlertType.STOP_MOVED -> "Stop Moved"
-                                                            com.kiz.transitapp.ui.viewmodel.AlertType.SERVICE_CHANGE -> "Service Change"
-                                                            else -> "Alert"
-                                                        },
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.error,
-                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                    Icon(
+                                                        imageVector = Icons.Default.Warning,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.error,
+                                                        modifier = Modifier.size(20.dp)
                                                     )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Text(
+                                                        text = alert.headerText,
+                                                        style = MaterialTheme.typography.titleSmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+
+                                                // Alert description
+                                                if (alert.descriptionText.isNotBlank()) {
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    Text(
+                                                        text = alert.descriptionText,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                }
+
+                                                // Alert type badge
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Row(
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    // Alert type
+                                                    Surface(
+                                                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.2f),
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = when (alert.alertType) {
+                                                                com.kiz.transitapp.ui.viewmodel.AlertType.DETOUR -> "Detour"
+                                                                com.kiz.transitapp.ui.viewmodel.AlertType.DELAY -> "Delay"
+                                                                com.kiz.transitapp.ui.viewmodel.AlertType.STOP_CLOSED -> "Stop Closed"
+                                                                com.kiz.transitapp.ui.viewmodel.AlertType.STOP_MOVED -> "Stop Moved"
+                                                                com.kiz.transitapp.ui.viewmodel.AlertType.SERVICE_CHANGE -> "Service Change"
+                                                                else -> "Alert"
+                                                            },
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.error,
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -979,20 +984,45 @@ fun StopInfoCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            if (arrivalTimes.isEmpty()) {
+            // Filter arrivals by selected route (if any)
+            val filteredArrivals = if (selectedRoute != null) {
+                arrivalTimes.filter { it.routeId == selectedRoute }
+            } else {
+                arrivalTimes
+            }
+
+            if (filteredArrivals.isEmpty()) {
                 Text(
-                    text = "No upcoming arrivals",
+                    text = if (selectedRoute != null) {
+                        "No upcoming arrivals for Route $selectedRoute"
+                    } else {
+                        "No upcoming arrivals"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                LazyColumn(
-                    modifier = Modifier.heightIn(max = 200.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                // Show first arrival with next 2 times
+                val primaryArrival = filteredArrivals.first()
+                val nextArrivals = filteredArrivals.drop(1).take(2)
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(arrivalTimes.take(5)) { arrival ->
-                        ArrivalTimeItem(arrival = arrival, viewModel = viewModel)
-                    }
+                    // Route label
+                    Text(
+                        text = "Route ${primaryArrival.routeId}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    // Arrival time display with next buses
+                    com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
+                        arrival = primaryArrival,
+                        viewModel = viewModel,
+                        nextArrivals = nextArrivals
+                    )
                 }
             }
 
@@ -1015,31 +1045,6 @@ fun StopInfoCard(
     }
 }
 
-@Composable
-fun ArrivalTimeItem(arrival: com.kiz.transitapp.ui.viewmodel.StopArrivalTime, viewModel: TransitViewModel) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Route label
-        Text(
-            text = "Route ${arrival.routeId}",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(end = 12.dp)
-        )
-
-        // Enhanced arrival time display with delay badge
-        com.kiz.transitapp.ui.components.ArrivalTimeDisplay(
-            arrival = arrival,
-            viewModel = viewModel,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
 
 @Composable
 fun BusInfoCard(
