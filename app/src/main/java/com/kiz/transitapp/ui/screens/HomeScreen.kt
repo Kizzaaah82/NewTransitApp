@@ -27,6 +27,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import coil.compose.SubcomposeAsyncImage
+import android.util.Log
 import com.kiz.transitapp.ui.navigation.Screen
 import com.kiz.transitapp.ui.viewmodel.TransitViewModel
 import com.kiz.transitapp.ui.viewmodel.BusStop
@@ -318,11 +320,35 @@ fun WeatherCard(viewModel: TransitViewModel, modifier: Modifier = Modifier) {
                             horizontalAlignment = Alignment.End
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = getWeatherIcon(weatherData!!.icon),
+                                // Debug: Log the weather icon code and URL
+                                val iconUrl = "https://openweathermap.org/img/wn/${weatherData!!.icon}@2x.png"
+                                LaunchedEffect(weatherData!!.icon) {
+                                    Log.d("WeatherCard", "Loading weather icon: ${weatherData!!.icon} from URL: $iconUrl")
+                                }
+
+                                // Use actual OpenWeatherMap icon
+                                SubcomposeAsyncImage(
+                                    model = iconUrl,
                                     contentDescription = "Weather",
-                                    tint = getWeatherIconColor(weatherData!!.icon),
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(48.dp),
+                                    error = {
+                                        // Fallback to Material icon if image fails to load
+                                        Log.e("WeatherCard", "Failed to load weather icon from: $iconUrl")
+                                        Icon(
+                                            imageVector = getWeatherIcon(weatherData!!.icon),
+                                            contentDescription = "Weather",
+                                            tint = getWeatherIconColor(weatherData!!.icon),
+                                            modifier = Modifier.size(48.dp)
+                                        )
+                                    },
+                                    loading = {
+                                        // Show a small loading indicator while image loads
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
+                                        )
+                                    }
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(

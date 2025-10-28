@@ -109,6 +109,10 @@ dependencies {
     implementation(libs.play.services.maps)
     implementation(libs.play.services.location)
     implementation(libs.maps.utils.ktx)
+
+    // Image loading
+    implementation(libs.coil.compose)
+
     // WorkManager
     implementation(libs.androidx.work.runtime.ktx)
 

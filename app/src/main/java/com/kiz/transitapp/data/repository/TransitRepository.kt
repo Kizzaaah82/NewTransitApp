@@ -88,11 +88,12 @@ class TransitRepository(private val context: Context) {
 
     /**
      * Enhanced function to get real-time arrivals with proper formatting for UI display.
-     * Returns 1 real-time prediction followed by 2 static schedule times.
+     * Returns 1 real-time prediction followed by 2 static schedule times per route (using short names).
      */
     suspend fun getMergedArrivalsForStop(
         stopId: String,
-        activeServiceIds: List<String>
+        activeServiceIds: List<String>,
+        routeIdToShortName: Map<String, String> = emptyMap()
     ): List<MergedArrivalTime> = withContext(Dispatchers.IO) {
         // 1. Fetch the base static schedule for the stop for today's active services.
         val staticArrivals = getStaticArrivalsForStop(stopId, activeServiceIds)
@@ -189,21 +190,34 @@ class TransitRepository(private val context: Context) {
             }
         }
 
-        // 5. Sort and organize: 1 real-time + 2 static times per route
+        // 5. Sort and organize: 1 real-time + 2 static times per route (using SHORT NAMES)
         // IMPORTANT: realTimeArrivals and staticOnlyArrivals should NEVER have the same tripId
         // because we separate them in step 4. But we still need to organize by route.
 
-        // Group by route to ensure proper distribution
-        val groupedByRoute = (realTimeArrivals + staticOnlyArrivals)
-            .groupBy { it.routeId }
+        // Convert route IDs to short names and group by short name
+        val allArrivalsWithShortNames = (realTimeArrivals + staticOnlyArrivals).map { arrival ->
+            val shortName = routeIdToShortName[arrival.routeId] ?: arrival.routeId
+            arrival to shortName
+        }
 
-        groupedByRoute.forEach { (routeId, arrivals) ->
-            // Separate real-time and static (they should already be separate, but be explicit)
-            val realTime = arrivals.filter { it.isRealTime }.take(1)
-            val static = arrivals.filter { !it.isRealTime }.take(2)
+        val groupedByShortName = allArrivalsWithShortNames.groupBy { it.second }
+
+        groupedByShortName.forEach { (shortName, arrivalsWithNames) ->
+            val arrivals = arrivalsWithNames.map { it.first }
+
+            // Separate real-time and static, then SORT BY TIME before taking
+            val realTime = arrivals
+                .filter { it.isRealTime }
+                .sortedBy { it.arrivalTime }
+                .take(1)
+
+            val static = arrivals
+                .filter { !it.isRealTime }
+                .sortedBy { it.arrivalTime }
+                .take(2)
 
             // DEBUG: Log what we're adding for this route
-            Log.d("TransitRepository", "Route $routeId - RT count: ${realTime.size}, Static count: ${static.size}")
+            Log.d("TransitRepository", "Route $shortName - RT count: ${realTime.size}, Static count: ${static.size}")
             realTime.forEach { rt ->
                 Log.d("TransitRepository", "  RT: Trip ${rt.tripId} @ ${rt.arrivalTime} (delay: ${rt.delaySeconds}s, scheduled: ${rt.scheduledTime})")
             }
@@ -216,7 +230,7 @@ class TransitRepository(private val context: Context) {
                 val rtTime = realTime[0].arrivalTime
                 val duplicateTimeStatic = static.filter { it.arrivalTime == rtTime }
                 if (duplicateTimeStatic.isNotEmpty()) {
-                    Log.w("TransitRepository", "Route $routeId: Real-time at $rtTime (trip ${realTime[0].tripId}) and ${duplicateTimeStatic.size} static arrival(s) also at $rtTime (trips: ${duplicateTimeStatic.map { it.tripId }})")
+                    Log.w("TransitRepository", "Route $shortName: Real-time at $rtTime (trip ${realTime[0].tripId}) and ${duplicateTimeStatic.size} static arrival(s) also at $rtTime (trips: ${duplicateTimeStatic.map { it.tripId }})")
                 }
             }
 

@@ -2007,7 +2007,11 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
                     async {
                         try {
                             // Call the repository method that returns MergedArrivalTime
-                            val mergedArrivals = repository.getMergedArrivalsForStop(favoriteStopRoute.stopId, activeServiceIds)
+                            val mergedArrivals = repository.getMergedArrivalsForStop(
+                                stopId = favoriteStopRoute.stopId,
+                                activeServiceIds = activeServiceIds,
+                                routeIdToShortName = transitDataSnapshot?.routeIdToShortName ?: emptyMap()
+                            )
 
                             // Filter arrivals to only show the favorited route (match by short name)
                             val routeSpecificArrivals = mergedArrivals.filter { arrival ->
@@ -2070,7 +2074,11 @@ class TransitViewModel(application: Application) : AndroidViewModel(application)
                 val transitDataSnapshot = _transitData.value
 
                 // Call the repository method that returns MergedArrivalTime
-                val mergedArrivals = repository.getMergedArrivalsForStop(stopId, activeServiceIds)
+                val mergedArrivals = repository.getMergedArrivalsForStop(
+                    stopId = stopId,
+                    activeServiceIds = activeServiceIds,
+                    routeIdToShortName = transitDataSnapshot?.routeIdToShortName ?: emptyMap()
+                )
 
                 // Map MergedArrivalTime to StopArrivalTime with correct field mapping (route short names)
                 return@withContext mergedArrivals.map { arrival ->
