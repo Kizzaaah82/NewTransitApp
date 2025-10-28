@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import android.util.Log
+import coil.compose.AsyncImage
 import com.kiz.transitapp.ui.navigation.Screen
 import com.kiz.transitapp.ui.viewmodel.TransitViewModel
 import com.kiz.transitapp.ui.viewmodel.BusStop
@@ -319,13 +320,17 @@ fun WeatherCard(viewModel: TransitViewModel, modifier: Modifier = Modifier) {
                             horizontalAlignment = Alignment.End
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Use Material Design icon based on weather condition
-                                Icon(
-                                    imageVector = getWeatherIcon(weatherData!!.icon),
-                                    contentDescription = "Weather",
-                                    tint = getWeatherIconColor(weatherData!!.icon),
-                                    modifier = Modifier.size(48.dp)
-                                )
+                                // Load actual OpenWeatherMap icon
+                                Box(modifier = Modifier.size(48.dp)) {
+                                    AsyncImage(
+                                        model = "https://openweathermap.org/img/wn/${weatherData!!.icon}@2x.png",
+                                        contentDescription = "Weather icon",
+                                        modifier = Modifier.fillMaxSize(),
+                                        onError = { error ->
+                                            Log.e("WeatherIcon", "Failed to load icon: ${weatherData!!.icon}", error.result.throwable)
+                                        }
+                                    )
+                                }
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "${weatherData!!.temperature}°C",
