@@ -2,12 +2,15 @@ package com.kiz.transitapp
 
 import android.app.Application
 import androidx.work.*
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.util.DebugLogger
 import com.kiz.transitapp.workers.GtfsDownloadWorker
 import com.kiz.transitapp.workers.DatabasePreloadWorker
 import java.util.concurrent.TimeUnit
 import java.util.Calendar
 
-class TransitApplication : Application() {
+class TransitApplication : Application(), ImageLoaderFactory {
     val workManagerConfiguration: Configuration = Configuration.Builder()
         .setMinimumLoggingLevel(android.util.Log.INFO)
         .build()
@@ -17,6 +20,14 @@ class TransitApplication : Application() {
         scheduleGtfsDownload()
         // PERFORMANCE: Schedule database preloading for faster app startup
         // DatabasePreloadWorker.schedulePreload(this) // DISABLED: DatabasePreloadWorker disabled
+    }
+
+    override fun newImageLoader(): ImageLoader {
+        return ImageLoader.Builder(this)
+            .crossfade(true)
+            .logger(DebugLogger())
+            .respectCacheHeaders(false)
+            .build()
     }
 
     private fun scheduleGtfsDownload() {
