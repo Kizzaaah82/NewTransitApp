@@ -7,12 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.WbSunny
-import androidx.compose.material.icons.filled.Thunderstorm
-import androidx.compose.material.icons.filled.AcUnit
-import androidx.compose.material.icons.filled.Grain
-import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.Event
@@ -47,19 +42,6 @@ private fun getCurrentDate(): String {
     return dateFormat.format(Date())
 }
 
-// Get appropriate weather icon based on OpenWeatherMap icon code
-private fun getWeatherIcon(iconCode: String): ImageVector {
-    return when {
-        iconCode.startsWith("01") -> Icons.Filled.WbSunny // Clear sky
-        iconCode.startsWith("02") -> Icons.Filled.CloudQueue // Few clouds
-        iconCode.startsWith("03") || iconCode.startsWith("04") -> Icons.Filled.Cloud // Clouds
-        iconCode.startsWith("09") || iconCode.startsWith("10") -> Icons.Filled.Grain // Rain
-        iconCode.startsWith("11") -> Icons.Filled.Thunderstorm // Thunderstorm
-        iconCode.startsWith("13") -> Icons.Filled.AcUnit // Snow
-        iconCode.startsWith("50") -> Icons.Filled.Cloud // Mist/fog
-        else -> Icons.Filled.Cloud // Default
-    }
-}
 
 // Get appropriate time icon based on current hour
 private fun getTimeIcon(): ImageVector {
@@ -88,20 +70,6 @@ private fun getTimeIconColor(): Color {
     }
 }
 
-// Get contextual color for weather icon
-@Composable
-private fun getWeatherIconColor(iconCode: String): Color {
-    return when {
-        iconCode.startsWith("01") -> Color(0xFFFFD54F) // Clear sky - yellow
-        iconCode.startsWith("02") -> Color(0xFFB0BEC5) // Few clouds - light gray
-        iconCode.startsWith("03") || iconCode.startsWith("04") -> Color(0xFF90A4AE) // Clouds - gray
-        iconCode.startsWith("09") || iconCode.startsWith("10") -> Color(0xFF64B5F6) // Rain - blue
-        iconCode.startsWith("11") -> Color(0xFF9575CD) // Thunderstorm - purple
-        iconCode.startsWith("13") -> Color(0xFFE1F5FE) // Snow - light blue/white
-        iconCode.startsWith("50") -> Color(0xFFCFD8DC) // Mist - light gray
-        else -> Color(0xFF90A4AE) // Default - gray
-    }
-}
 
 @Composable
 fun HomeScreen(
@@ -266,7 +234,7 @@ fun WeatherCard(viewModel: TransitViewModel, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .height(140.dp),
+            .height(170.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         )
@@ -321,16 +289,20 @@ fun WeatherCard(viewModel: TransitViewModel, modifier: Modifier = Modifier) {
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 // Load actual OpenWeatherMap icon
-                                Box(modifier = Modifier.size(48.dp)) {
-                                    AsyncImage(
-                                        model = "https://openweathermap.org/img/wn/${weatherData!!.icon}@2x.png",
-                                        contentDescription = "Weather icon",
-                                        modifier = Modifier.fillMaxSize(),
-                                        onError = { error ->
-                                            Log.e("WeatherIcon", "Failed to load icon: ${weatherData!!.icon}", error.result.throwable)
-                                        }
-                                    )
-                                }
+                                val iconUrl = "https://openweathermap.org/img/wn/${weatherData!!.icon}@2x.png"
+                                Log.d("WeatherCard", "Loading weather icon from URL: $iconUrl")
+
+                                AsyncImage(
+                                    model = iconUrl,
+                                    contentDescription = "Weather icon",
+                                    modifier = Modifier.size(64.dp),
+                                    onSuccess = {
+                                        Log.d("WeatherCard", "Successfully loaded weather icon: ${weatherData!!.icon}")
+                                    },
+                                    onError = { error ->
+                                        Log.e("WeatherCard", "Failed to load weather icon: ${weatherData!!.icon}", error.result.throwable)
+                                    }
+                                )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "${weatherData!!.temperature}°C",

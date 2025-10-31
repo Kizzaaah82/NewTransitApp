@@ -64,13 +64,39 @@ private fun PrimaryArrivalDisplay(
 
     // Determine color based on delay (only for real-time data)
     val textColor = if (arrival.isRealTime && arrival.isFeedFresh) {
-        val delayMinutes = (arrival.delaySeconds / 60.0).roundToInt()
+        // Calculate delay: Try feed's delaySeconds first, then calculate from scheduled time
+        val delayMinutes = if (arrival.delaySeconds != 0) {
+            // Use the delay from the GTFS-RT feed
+            val delayMins = (arrival.delaySeconds / 60.0).roundToInt()
+            android.util.Log.d("ArrivalTimeDisplay", "Using feed delay: ${arrival.delaySeconds}s = $delayMins mins (Route: ${arrival.routeId})")
+            delayMins
+        } else if (arrival.scheduledTime != null) {
+            // Fallback: Calculate delay by comparing real-time arrival vs scheduled time
+            val scheduledCountdown = viewModel.getArrivalCountdown(arrival.scheduledTime!!)
+            val calculatedDelay = countdown - scheduledCountdown
+            android.util.Log.d("ArrivalTimeDisplay", "Calculated delay from times: Real=${countdown}m, Scheduled=${scheduledCountdown}m, Delay=${calculatedDelay}m (Route: ${arrival.routeId})")
+            calculatedDelay
+        } else {
+            android.util.Log.d("ArrivalTimeDisplay", "No delay info available (Route: ${arrival.routeId})")
+            0
+        }
+
         when {
-            delayMinutes >= 5 -> PastelRed // Red for 5+ min late
-            delayMinutes in 1..4 -> PastelOrange // Orange for 1-4 min late
-            else -> PastelBlue // Blue for on-time/early
+            delayMinutes >= 5 -> {
+                android.util.Log.d("ArrivalTimeDisplay", "🔴 RED: ${delayMinutes} mins late (Route: ${arrival.routeId})")
+                PastelRed // Red for 5+ min late
+            }
+            delayMinutes in 1..4 -> {
+                android.util.Log.d("ArrivalTimeDisplay", "🟠 ORANGE: ${delayMinutes} mins late (Route: ${arrival.routeId})")
+                PastelOrange // Orange for 1-4 min late
+            }
+            else -> {
+                android.util.Log.d("ArrivalTimeDisplay", "🔵 BLUE: On time or ${-delayMinutes} mins early (Route: ${arrival.routeId})")
+                PastelBlue // Blue for on-time/early
+            }
         }
     } else {
+        android.util.Log.d("ArrivalTimeDisplay", "⚪ GREY: Static schedule (Route: ${arrival.routeId}, isRealTime=${arrival.isRealTime}, isFeedFresh=${arrival.isFeedFresh})")
         // Grey for static scheduled times
         MaterialTheme.colorScheme.onSurfaceVariant
     }
